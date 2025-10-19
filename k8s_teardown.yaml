@@ -1,0 +1,30 @@
+---
+- name: Kubernetes Cluster Teardown
+  hosts: all
+  become: yes
+  
+  tasks:
+    - name: Reset kubeadm configuration
+      command: kubeadm reset --force
+      failed_when: false
+
+    - name: Remove Kubernetes configuration directory
+      file:
+        path: /etc/kubernetes
+        state: absent
+
+    - name: Remove .kube directory from root
+      file:
+        path: /root/.kube
+        state: absent
+    
+
+    - name: Remove .kube directories from user home
+      file:
+        path: "{{ ansible_user }}/.kube"
+        state: absent
+
+    - name: Remove CNI configuration directory
+      file:
+        path: /etc/cni/net.d
+        state: absent

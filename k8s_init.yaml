@@ -1,0 +1,129 @@
+- name: Initialize Kubernetes controller node (after installing Kubelet)
+  hosts: main_controller
+  become: yes
+    
+  tasks:
+    - name: Gather network facts
+      setup:
+        gather_subset: network
+
+    - name: Add k8scp alias to /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ansible_eth0.ipv4.address}}    {{ansible_hostname}} k8scp"
+        state: present
+
+    - name: Check if cluster is already initialized
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: kubeadm_init
+
+    - name: Initialize Kubernetes cluster
+      command: >
+        kubeadm init
+        --pod-network-cidr={{ pod_network_cidr }}
+        --cri-socket=unix:///var/run/crio/crio.sock
+        --control-plane-endpoint=k8scp:6443
+        --upload-certs
+      when: not kubeadm_init.stat.exists
+      register: kubeadm_init_result
+
+    - name: Create .kube directory for root
+      file:
+        path: /root/.kube
+        state: directory
+        mode: '0755'
+
+    - name: Copy admin.conf to root's kube config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: yes
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create .kube directory for user
+      file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Copy admin.conf to user's kube config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "/home/{{ ansible_user }}/.kube/config"
+        remote_src: yes
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+
+    - name: Get Cilium CLI version
+      ansible.builtin.uri:
+        url: https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt
+        return_content: true
+      register: CILIUM_CLI_VERSION
+
+    - name: Download and install Cilium CLI
+      ansible.builtin.unarchive:
+        src: https://github.com/cilium/cilium-cli/releases/download/{{ CILIUM_CLI_VERSION.content | trim }}/cilium-linux-arm64.tar.gz
+        dest: /usr/local/bin
+        remote_src: yes
+
+    - name: Install Cilium
+      ansible.builtin.command: /usr/local/bin/cilium install
+
+    - name: Generate join command
+      command: kubeadm token create --print-join-command
+      register: join_command
+      when: not kubeadm_init.stat.exists
+
+    - name: Save join command to file
+      copy:
+        content: "{{ join_command.stdout }} --cri-socket=unix:///var/run/crio/crio.sock"
+        dest: /home/{{ansible_user}}/k8s-join-command
+      when: not kubeadm_init.stat.exists
+
+    - name: Add kubectl autocompletion to bashrc
+      lineinfile:
+        path: /home/{{ansible_user}}/.bashrc
+        line: source <(kubectl completion bash)
+        state: present
+
+- name: Verify cluster status
+  hosts: all
+  become_user: "{{ ansible_user }}"
+  
+  tasks:
+    - name: Wait for all nodes to be ready
+      command: kubectl get nodes
+      register: nodes_status
+      until: nodes_status.stdout.find("NotReady") == -1
+      retries: 30
+      delay: 10
+
+    - name: Display cluster nodes
+      command: kubectl get nodes -o wide
+      register: cluster_nodes
+
+    - name: Show cluster status
+      debug:
+        msg: "{{ cluster_nodes.stdout_lines }}"
+
+    - name: Display cluster info
+      command: kubectl cluster-info
+      register: cluster_info
+
+    - name: Show cluster info
+      debug:
+        msg: "{{ cluster_info.stdout_lines }}"
+
+    - name: Verify CRI-O runtime
+      command: kubectl get nodes -o jsonpath='{.items[*].status.nodeInfo.containerRuntimeVersion}'
+      register: runtime_version
+
+    - name: Show container runtime
+      debug:
+        msg: "Container Runtime: {{ runtime_version.stdout }}"

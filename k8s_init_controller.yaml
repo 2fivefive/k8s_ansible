@@ -7,11 +7,12 @@
       setup:
         gather_subset: network
 
-    - name: Add k8scp alias to /etc/hosts
-      lineinfile:
-        path: /etc/hosts
-        line: "{{ansible_eth0.ipv4.address}}    {{ansible_hostname}} k8scp"
-        state: present
+# Use this for HA
+#    - name: Add k8scp alias to /etc/hosts
+#      lineinfile:
+#        path: /etc/hosts
+#        line: "{{ansible_eth0.ipv4.address}}    {{ansible_hostname}} k8scp"
+#        state: present
 
     - name: Check if cluster is already initialized
       stat:
@@ -23,7 +24,7 @@
         kubeadm init
         --pod-network-cidr={{ pod_network_cidr }}
         --cri-socket=unix:///var/run/crio/crio.sock
-        --control-plane-endpoint=k8scp:6443
+        --control-plane-endpoint={{ansible_hostname}}:6443
         --upload-certs
       when: not kubeadm_init.stat.exists
       register: kubeadm_init_result
@@ -60,31 +61,28 @@
         group: "{{ ansible_user }}"
         mode: '0644'
 
+    - name: Check for Cilium CLI
+      stat:
+        path: /usr/local/bin/cilium
+      register: cilium
+
+
     - name: Get Cilium CLI version
       ansible.builtin.uri:
         url: https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt
         return_content: true
       register: CILIUM_CLI_VERSION
+      when: not cilium.stat.exists
 
     - name: Download and install Cilium CLI
       ansible.builtin.unarchive:
         src: https://github.com/cilium/cilium-cli/releases/download/{{ CILIUM_CLI_VERSION.content | trim }}/cilium-linux-arm64.tar.gz
         dest: /usr/local/bin
         remote_src: yes
+      when: not cilium.stat.exists
 
     - name: Install Cilium
-      ansible.builtin.command: /usr/local/bin/cilium install
-
-    - name: Generate join command
-      command: kubeadm token create --print-join-command
-      register: join_command
-      when: not kubeadm_init.stat.exists
-
-    - name: Save join command to file
-      copy:
-        content: "{{ join_command.stdout }} --cri-socket=unix:///var/run/crio/crio.sock"
-        dest: /home/{{ansible_user}}/k8s-join-command
-      when: not kubeadm_init.stat.exists
+      ansible.builtin.command: /usr/local/bin/cilium install --set=ipam.operator.clusterPoolIPv4PodCIDRList="{{ pod_network_cidr }}"
 
     - name: Add kubectl autocompletion to bashrc
       lineinfile:
@@ -92,38 +90,9 @@
         line: source <(kubectl completion bash)
         state: present
 
-- name: Verify cluster status
-  hosts: all
-  become_user: "{{ ansible_user }}"
-  
-  tasks:
-    - name: Wait for all nodes to be ready
-      command: kubectl get nodes
-      register: nodes_status
-      until: nodes_status.stdout.find("NotReady") == -1
-      retries: 30
-      delay: 10
+    - name: Add kubens command
+      lineinfile:
+        path: /home/{{ ansible_user }}/.bashrc
+        line: "alias kubens=\"kubectl config set-context --current --namespace\""
+        state: present
 
-    - name: Display cluster nodes
-      command: kubectl get nodes -o wide
-      register: cluster_nodes
-
-    - name: Show cluster status
-      debug:
-        msg: "{{ cluster_nodes.stdout_lines }}"
-
-    - name: Display cluster info
-      command: kubectl cluster-info
-      register: cluster_info
-
-    - name: Show cluster info
-      debug:
-        msg: "{{ cluster_info.stdout_lines }}"
-
-    - name: Verify CRI-O runtime
-      command: kubectl get nodes -o jsonpath='{.items[*].status.nodeInfo.containerRuntimeVersion}'
-      register: runtime_version
-
-    - name: Show container runtime
-      debug:
-        msg: "Container Runtime: {{ runtime_version.stdout }}"

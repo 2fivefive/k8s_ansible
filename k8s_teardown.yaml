@@ -21,10 +21,22 @@
 
     - name: Remove .kube directories from user home
       file:
-        path: "{{ ansible_user }}/.kube"
+        path: "/home/{{ ansible_user }}/.kube"
         state: absent
 
     - name: Remove CNI configuration directory
       file:
         path: /etc/cni/net.d
-        state: absent
+        state: absent 
+    
+    
+    - name: Reboot (unsticks the CNI status)
+      reboot:
+
+- name: Uninstall Cilium from controller
+  hosts: leonardo
+  become: yes
+
+  tasks:
+    - name: Uninstall Cilium
+      command: cilium uninstall

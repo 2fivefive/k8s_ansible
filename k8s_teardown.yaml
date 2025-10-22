@@ -1,4 +1,12 @@
 ---
+- name: Uninstall Cilium from controller
+  hosts: leonardo
+  become: yes
+
+  tasks:
+    - name: Uninstall Cilium
+      command: cilium uninstall
+
 - name: Kubernetes Cluster Teardown
   hosts: all
   become: yes
@@ -32,11 +40,7 @@
     
     - name: Reboot (unsticks the CNI status)
       reboot:
-
-- name: Uninstall Cilium from controller
-  hosts: leonardo
-  become: yes
-
-  tasks:
-    - name: Uninstall Cilium
-      command: cilium uninstall
+        msg: "Rebooting to unstick CNI status"
+        reboot_timeout: 120 
+        pre_reboot_delay: 0
+        post_reboot_delay: 30 

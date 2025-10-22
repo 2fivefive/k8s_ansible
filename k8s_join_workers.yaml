@@ -1,0 +1,72 @@
+
+- name: Gather Control Node Facts
+  hosts: leonardo
+  become: yes
+    
+  tasks:
+    - name: Check if cluster is already initialized
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: kubeadm_init
+
+    - name: Create new token and join command
+      command: kubeadm token create --print-join-command --ttl 5m
+      register: join_command
+    - debug:
+        var: join_command.stdout
+
+
+
+- name: Initialize Worker Nodes and Join to Controller
+  hosts: workers
+  become: yes
+
+  tasks:
+
+    # async and poll because 
+    - name: Initialize kubelet and join to controller
+      command: "{{ hostvars['leonardo']['join_command'].stdout }}"
+      #async: 600
+      #poll: 5
+
+
+
+
+
+
+
+#- name: Verify cluster status
+#  hosts: all
+#  become_user: "{{ ansible_user }}"
+#  
+#  tasks:
+#    - name: Wait for all nodes to be ready
+#      command: kubectl get nodes
+#      register: nodes_status
+#      until: nodes_status.stdout.find("NotReady") == -1
+#      retries: 30
+#      delay: 10
+#
+#    - name: Display cluster nodes
+#      command: kubectl get nodes -o wide
+#      register: cluster_nodes
+#
+#    - name: Show cluster status
+#      debug:
+#        msg: "{{ cluster_nodes.stdout_lines }}"
+#
+#    - name: Display cluster info
+#      command: kubectl cluster-info
+#      register: cluster_info
+#
+#    - name: Show cluster info
+#      debug:
+#        msg: "{{ cluster_info.stdout_lines }}"
+#
+#    - name: Verify CRI-O runtime
+#      command: kubectl get nodes -o jsonpath='{.items[*].status.nodeInfo.containerRuntimeVersion}'
+#      register: runtime_version
+#
+#    - name: Show container runtime
+#      debug:
+#        msg: "Container Runtime: {{ runtime_version.stdout }}"
